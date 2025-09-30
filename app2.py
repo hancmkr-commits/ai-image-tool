@@ -288,23 +288,9 @@ def upload_test():
       'message': '画像アップロード機能は開発中です',
       'status': 'coming_soon'
   })
-@app.route('/api/system-info', methods=['GET'])
-def system_info():
-    import sys
-    import time
-    import psutil
-    
-    memory_info = psutil.virtual_memory()
-    return jsonify({
-        'success': True,
-        'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
-        'flask_version': '2.3.3',
-        'uptime': time.strftime('%H:%M:%S', time.gmtime(time.time())),
-        'memory_usage': f"{memory_info.percent}%",
-        'platform': sys.platform
-    })
-  
+
 if __name__ == '__main__':
   port = int(os.environ.get('PORT', 5000))
   app.run(host='0.0.0.0', port=port, debug=False)
+
 
