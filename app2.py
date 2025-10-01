@@ -1,11 +1,17 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import os
 import base64
 import io
+from PIL import Image
+import time
 
 app = Flask(__name__)
 CORS(app)
+
+# 업로드 폴더 생성
+UPLOAD_FOLDER = '/tmp/uploads'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route('/')
 def home():
@@ -14,10 +20,10 @@ def home():
   <html lang="ja">
   <head>
       <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI画像ツール</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
-    <style>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>AI画像ツール</title>
+      <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+      <style>
           body { 
               font-family: 'Hiragino Sans', 'Yu Gothic', 'Meiryo', sans-serif; 
               max-width: 800px; 
@@ -47,6 +53,10 @@ def home():
               border-color: #0056b3; 
               background: #e3f2fd;
               transform: translateY(-2px);
+          }
+          .upload-area.dragover {
+              border-color: #28a745;
+              background: #d4edda;
           }
           .btn { 
               background: linear-gradient(45deg, #007bff, #0056b3);
@@ -85,135 +95,211 @@ def home():
               color: #0c5460; 
               border: 1px solid #bee5eb;
           }
-          .feature-list {
-              text-align: left;
-              background: #f8f9fa;
-              padding: 20px;
-              border-radius: 10px;
+          .image-preview {
+              max-width: 100%;
+              max-height: 400px;
               margin: 20px 0;
+              border-radius: 10px;
+              box-shadow: 0 4px 15px rgba(0,0,0,0.2);
           }
-          .feature-list h3 {
-              color: #007bff;
-              margin-top: 0;
-          }
-          .feature-list ul {
-              list-style-type: none;
-              padding: 0;
-          }
-          .feature-list li {
-              padding: 8px 0;
-              border-bottom: 1px solid #dee2e6;
-          }
-          .feature-list li:before {
-              content: "✨ ";
-              margin-right: 10px;
-          }
-          .version-info {
-              background: #e9ecef;
+          .image-info {
+              background: #f8f9fa;
               padding: 15px;
               border-radius: 10px;
+              margin: 10px 0;
+              text-align: left;
+          }
+          .controls {
               margin: 20px 0;
-              font-size: 14px;
+          }
+          .slider-container {
+              margin: 15px 0;
+              text-align: left;
+          }
+          .slider {
+              width: 100%;
+              margin: 10px 0;
+          }
+          #fileInput {
+              display: none;
           }
       </style>
   </head>
   <body>
       <div class="container">
           <h1>🎨 AI画像ツール</h1>
-          <p>高機能画像処理・編集ツール（デプロイ中）</p>
+          <p>高機能画像処理・編集ツール</p>
           
-          <div class="status info">
-              <h3>🚀 現在の状況</h3>
-              <p>基本システムのデプロイが完了しました！<br>
-              画像処理機能を段階的に追加していきます。</p>
-          </div>
-          
-          <div class="upload-area" onclick="showComingSoon()">
+          <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
               <h2>📁 画像をアップロード</h2>
-              <p>クリックしてファイルを選択<br>
-              <small>（近日公開予定）</small></p>
+              <p>クリックしてファイルを選択するか、<br>ここにドラッグ&ドロップしてください</p>
+              <small>対応形式: JPG, PNG, GIF, WebP</small>
           </div>
           
-          <div class="feature-list">
-              <h3>🎯 予定機能</h3>
-              <ul>
-                  <li>画像アップロード・プレビュー</li>
-                  <li>明度・コントラスト・彩度調整</li>
-                  <li>ブラー・シャープネス効果</li>
-                  <li>背景除去（AI処理）</li>
-                  <li>フィルター効果（セピア、モノクロなど）</li>
-                  <li>画像リサイズ・回転</li>
-                  <li>複数画像の一括処理</li>
-                  <li>編集履歴・アンドゥ機能</li>
-              </ul>
-          </div>
+          <input type="file" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
           
-          <div>
-              <button class="btn" onclick="testConnection()">🔧 接続テスト</button>
-              <button class="btn" onclick="showSystemInfo()">📊 システム情報</button>
-              <button class="btn" onclick="checkUpdates()">🔄 更新確認</button>
+          <div id="imageContainer" style="display: none;">
+              <h3>📷 アップロードされた画像</h3>
+              <img id="imagePreview" class="image-preview">
+              <div id="imageInfo" class="image-info"></div>
+              
+              <div class="controls">
+                  <h4>🎛️ 画像編集</h4>
+                  <div class="slider-container">
+                      <label>明度: <span id="brightnessValue">100</span>%</label>
+                      <input type="range" id="brightnessSlider" class="slider" min="0" max="200" value="100" oninput="adjustImage()">
+                  </div>
+                  <div class="slider-container">
+                      <label>コントラスト: <span id="contrastValue">100</span>%</label>
+                      <input type="range" id="contrastSlider" class="slider" min="0" max="200" value="100" oninput="adjustImage()">
+                  </div>
+                  <div class="slider-container">
+                      <label>彩度: <span id="saturationValue">100</span>%</label>
+                      <input type="range" id="saturationSlider" class="slider" min="0" max="200" value="100" oninput="adjustImage()">
+                  </div>
+                  
+                  <button class="btn" onclick="resetImage()">🔄 リセット</button>
+                  <button class="btn" onclick="downloadImage()">💾 ダウンロード</button>
+              </div>
           </div>
           
           <div id="statusArea"></div>
-          
-          <div class="version-info">
-              <strong>バージョン:</strong> 1.0.0-beta<br>
-              <strong>最終更新:</strong> 2024年10月1日<br>
-              <strong>ステータス:</strong> <span style="color: #28a745;">✅ オンライン</span>
-          </div>
       </div>
 
       <script>
-          function showComingSoon() {
-              showStatus('info', '🚧 開発中', '画像アップロード機能は現在開発中です。もうしばらくお待ちください！');
+          let originalImageData = null;
+          let currentImageData = null;
+
+          // ドラッグ&ドロップ機能
+          const uploadArea = document.getElementById('uploadArea');
+          
+          uploadArea.addEventListener('dragover', (e) => {
+              e.preventDefault();
+              uploadArea.classList.add('dragover');
+          });
+          
+          uploadArea.addEventListener('dragleave', () => {
+              uploadArea.classList.remove('dragover');
+          });
+          
+          uploadArea.addEventListener('drop', (e) => {
+              e.preventDefault();
+              uploadArea.classList.remove('dragover');
+              const files = e.dataTransfer.files;
+              if (files.length > 0) {
+                  handleFile(files[0]);
+              }
+          });
+
+          function handleFileSelect(event) {
+              const file = event.target.files[0];
+              if (file) {
+                  handleFile(file);
+              }
           }
 
-          function testConnection() {
-              showStatus('info', '🔄 テスト中...', '接続をテストしています...');
-              
-              fetch('/api/test')
+          function handleFile(file) {
+              if (!file.type.startsWith('image/')) {
+                  showStatus('error', '❌ エラー', '画像ファイルを選択してください。');
+                  return;
+              }
+
+              showStatus('info', '🔄 アップロード中...', 'ファイルを処理しています...');
+
+              const formData = new FormData();
+              formData.append('image', file);
+
+              fetch('/api/upload', {
+                  method: 'POST',
+                  body: formData
+              })
               .then(response => response.json())
               .then(data => {
                   if (data.success) {
-                      showStatus('success', '✅ 接続成功', 
-                          `サーバーとの接続が正常です。<br>
-                          レスポンス時間: ${data.response_time}ms<br>
-                          サーバー時刻: ${data.server_time}`);
+                      displayImage(data);
+                      showStatus('success', '✅ アップロード成功', `ファイル名: ${file.name}<br>サイズ: ${(file.size/1024/1024).toFixed(2)} MB`);
                   } else {
-                      showStatus('error', '❌ 接続エラー', data.message);
+                      showStatus('error', '❌ アップロード失敗', data.message);
                   }
               })
               .catch(error => {
-                  showStatus('error', '❌ 接続失敗', 'サーバーとの接続に失敗しました。');
+                  showStatus('error', '❌ エラー', 'アップロードに失敗しました。');
               });
           }
 
-          function showSystemInfo() {
-              fetch('/api/system-info')
-              .then(response => response.json())
-              .then(data => {
-                  showStatus('info', '📊 システム情報', 
-                      `Python バージョン: ${data.python_version}<br>
-                      Flask バージョン: ${data.flask_version}<br>
-                      サーバー稼働時間: ${data.uptime}<br>
-                      メモリ使用量: ${data.memory_usage}`);
-              })
-              .catch(error => {
-                  showStatus('error', '❌ 情報取得失敗', 'システム情報の取得に失敗しました。');
-              });
+          function displayImage(data) {
+              const imageContainer = document.getElementById('imageContainer');
+              const imagePreview = document.getElementById('imagePreview');
+              const imageInfo = document.getElementById('imageInfo');
+
+              imagePreview.src = 'data:image/jpeg;base64,' + data.image_data;
+              originalImageData = data.image_data;
+              currentImageData = data.image_data;
+
+              imageInfo.innerHTML = `
+                  <strong>ファイル情報:</strong><br>
+                  サイズ: ${data.width} × ${data.height} px<br>
+                  フォーマット: ${data.format}<br>
+                  ファイルサイズ: ${data.file_size}
+              `;
+
+              imageContainer.style.display = 'block';
+              resetSliders();
           }
 
-          function checkUpdates() {
-              showStatus('info', '🔄 更新確認中...', '新しい機能をチェックしています...');
-              
-              setTimeout(() => {
-                  showStatus('success', '✨ 更新情報', 
-                      `次回のアップデートで追加予定:<br>
-                      • 基本的な画像編集機能<br>
-                      • ファイルアップロード<br>
-                      • プレビュー機能<br>
-                      • 簡単なフィルター`);
-              }, 1500);
+          function adjustImage() {
+              const brightness = document.getElementById('brightnessSlider').value;
+              const contrast = document.getElementById('contrastSlider').value;
+              const saturation = document.getElementById('saturationSlider').value;
+
+              document.getElementById('brightnessValue').textContent = brightness;
+              document.getElementById('contrastValue').textContent = contrast;
+              document.getElementById('saturationValue').textContent = saturation;
+
+              const imagePreview = document.getElementById('imagePreview');
+              imagePreview.style.filter = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+          }
+
+          function resetImage() {
+              resetSliders();
+              adjustImage();
+              showStatus('info', '🔄 リセット', '画像を元の状態に戻しました。');
+          }
+
+          function resetSliders() {
+              document.getElementById('brightnessSlider').value = 100;
+              document.getElementById('contrastSlider').value = 100;
+              document.getElementById('saturationSlider').value = 100;
+              document.getElementById('brightnessValue').textContent = '100';
+              document.getElementById('contrastValue').textContent = '100';
+              document.getElementById('saturationValue').textContent = '100';
+          }
+
+          function downloadImage() {
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              const img = document.getElementById('imagePreview');
+
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+
+              // Apply filters
+              const brightness = document.getElementById('brightnessSlider').value;
+              const contrast = document.getElementById('contrastSlider').value;
+              const saturation = document.getElementById('saturationSlider').value;
+
+              ctx.filter = `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)`;
+              ctx.drawImage(img, 0, 0);
+
+              canvas.toBlob((blob) => {
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'edited_image.jpg';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  showStatus('success', '💾 ダウンロード', '編集済み画像をダウンロードしました。');
+              }, 'image/jpeg', 0.9);
           }
 
           function showStatus(type, title, message) {
@@ -225,30 +311,69 @@ def home():
                   </div>
               `;
               
-              // Auto hide after 10 seconds for success messages
               if (type === 'success' || type === 'info') {
                   setTimeout(() => {
                       statusArea.innerHTML = '';
-                  }, 10000);
+                  }, 5000);
               }
           }
 
-          // Show welcome message on load
+          // 초기 메시지
           window.onload = function() {
-              showStatus('success', '🎉 ようこそ！', 
-                  'AI画像ツールへようこそ！基本システムが正常に動作しています。');
+              showStatus('success', '🎉 準備完了！', '画像をアップロードして編集を始めましょう！');
           };
       </script>
   </body>
   </html>
   '''
 
+@app.route('/api/upload', methods=['POST'])
+def upload_image():
+  try:
+      if 'image' not in request.files:
+          return jsonify({'success': False, 'message': 'ファイルが選択されていません'})
+      
+      file = request.files['image']
+      if file.filename == '':
+          return jsonify({'success': False, 'message': 'ファイルが選択されていません'})
+      
+      # 画像を開いて処理
+      image = Image.open(file.stream)
+      
+      # RGB変換（必要に応じて）
+      if image.mode != 'RGB':
+          image = image.convert('RGB')
+      
+      # 画像情報取得
+      width, height = image.size
+      format_name = image.format or 'JPEG'
+      
+      # Base64エンコード
+      buffer = io.BytesIO()
+      image.save(buffer, format='JPEG', quality=90)
+      image_data = base64.b64encode(buffer.getvalue()).decode()
+      
+      # ファイルサイズ計算
+      file_size = f"{len(buffer.getvalue()) / 1024 / 1024:.2f} MB"
+      
+      return jsonify({
+          'success': True,
+          'message': 'アップロード成功',
+          'image_data': image_data,
+          'width': width,
+          'height': height,
+          'format': format_name,
+          'file_size': file_size
+      })
+      
+  except Exception as e:
+      return jsonify({'success': False, 'message': f'エラー: {str(e)}'})
+
 @app.route('/api/test', methods=['GET'])
 def test_connection():
   import time
   start_time = time.time()
   
-  # Simple test
   response_time = round((time.time() - start_time) * 1000, 2)
   
   return jsonify({
@@ -280,17 +405,6 @@ def system_info():
       'platform': sys.platform
   })
 
-@app.route('/api/upload-test', methods=['POST'])
-def upload_test():
-  """将来の画像アップロード機能のテスト"""
-  return jsonify({
-      'success': False,
-      'message': '画像アップロード機能は開発中です',
-      'status': 'coming_soon'
-  })
-
 if __name__ == '__main__':
   port = int(os.environ.get('PORT', 5000))
   app.run(host='0.0.0.0', port=port, debug=False)
-
-
